@@ -34,16 +34,19 @@
     {{-- PRICE + ACTION --}}
     <div class="flex items-center justify-between mt-5">
         <span class="text-pink-500 font-bold text-lg">
-            Rp {{ number_format($produk->harga) }}
+            Rp {{ number_format($produk->harga, 0, ',', '.') }}
         </span>
 
+        {{-- FORM ADD TO CART --}}
         <form method="POST" action="{{ route('customer.cart.add') }}">
             @csrf
+
             <input type="hidden" name="id" value="{{ $produk->id }}">
             <input type="hidden" name="name" value="{{ $produk->nama_produk }}">
             <input type="hidden" name="price" value="{{ $produk->harga }}">
 
             <button
+                type="submit"
                 class="bg-gradient-to-r from-pink-500 to-teal-400 text-white px-5 py-2 rounded-full text-sm font-semibold hover:opacity-90 transition">
                 Add to Cart
             </button>

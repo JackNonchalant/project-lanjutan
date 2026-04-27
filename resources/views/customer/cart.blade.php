@@ -9,6 +9,12 @@
     </div>
 @endif
 
+@if(session('error'))
+    <div class="mb-4 text-red-600">
+        {{ session('error') }}
+    </div>
+@endif
+
 @if(empty($cart))
     <p class="text-gray-500">Cart kamu masih kosong.</p>
 @else

@@ -41,16 +41,23 @@
         </a>
 
         {{-- LOCATION --}}
-        <a href="{{ route('customer.cart') }}" class="text-gray-800">
+<a href="{{ route('customer.cart') }}" class="text-gray-800">
+    <i class="bi bi-geo-alt"></i>
+</a>
 
-        {{-- PROFILE --}}
-        <form method="POST" action="{{ route('logout') }}">
-            @csrf
-            <button type="submit" class ="text-gray-800">
-                <i class="bi bi-person cursor-pointer"></i>
-            </button>
-        </form>
+{{-- PROFILE --}}
+<a href="{{ route('customer.profile') }}" class="text-gray-800">
+    <i class="bi bi-person"></i>
+</a>
 
+{{-- LOGOUT --}}
+<a href="#" onclick="event.preventDefault(); document.getElementById('logout-form').submit();">
+    Logout
+</a>
+
+<form id="logout-form" method="POST" action="{{ route('logout') }}" style="display: none;">
+    @csrf
+</form>
     </div>
 </nav>
 

@@ -4,33 +4,19 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use App\Models\Order;
 use App\Models\OrderItem;
 use App\Models\Produk;
+use Midtrans\Snap;
+use Midtrans\Config;
 
 class OrderController extends Controller
 {
     /*
-    |--------------------------------------------------------------------------
-    | CART PAGE
-    |--------------------------------------------------------------------------
-    */
-    public function cart()
-    {
-        $cart = session()->get('cart', []);
-        $total = 0;
-
-        foreach ($cart as $item) {
-            $total += $item['price'] * $item['qty'];
-        }
-
-        return view('customer.cart', compact('cart', 'total'));
-    }
-
-    /*
-    |--------------------------------------------------------------------------
+    |-----------------------------------------
     | ADD TO CART
-    |--------------------------------------------------------------------------
+    |-----------------------------------------
     */
     public function addToCart(Request $request)
     {
@@ -41,7 +27,7 @@ class OrderController extends Controller
         ]);
 
         $cart = session()->get('cart', []);
-        $id = $request->id;
+        $id = (int) $request->id;
 
         if (isset($cart[$id])) {
             $cart[$id]['qty']++;
@@ -56,15 +42,31 @@ class OrderController extends Controller
 
         session()->put('cart', $cart);
 
-        return redirect()
-            ->route('customer.cart')
+        return redirect()->route('customer.cart')
             ->with('success', 'Produk ditambahkan ke keranjang');
     }
 
     /*
-    |--------------------------------------------------------------------------
-    | REMOVE ITEM FROM CART
-    |--------------------------------------------------------------------------
+    |-----------------------------------------
+    | CART PAGE
+    |-----------------------------------------
+    */
+    public function cart()
+    {
+        $cart = session()->get('cart', []);
+        $total = 0;
+
+        foreach ($cart as $item) {
+            $total += $item['price'] * $item['qty'];
+        }
+
+        return view('customer.cart', compact('cart', 'total'));
+    }
+
+    /*
+    |-----------------------------------------
+    | REMOVE ITEM
+    |-----------------------------------------
     */
     public function removeFromCart($id)
     {
@@ -72,80 +74,108 @@ class OrderController extends Controller
 
         if (isset($cart[$id])) {
             unset($cart[$id]);
-            session()->put('cart', $cart);
         }
+
+        session()->put('cart', $cart);
 
         return back()->with('success', 'Produk dihapus dari keranjang');
     }
 
     /*
-    |--------------------------------------------------------------------------
+    |-----------------------------------------
     | CHECKOUT
-    |--------------------------------------------------------------------------
+    |-----------------------------------------
     */
     public function checkout()
     {
         $cart = session()->get('cart', []);
 
         if (empty($cart)) {
-            return redirect()->route('customer.products')
-                ->with('error', 'Keranjang masih kosong');
+            return back()->with('error', 'Keranjang kosong');
         }
 
         $total = 0;
 
-        // CEK STOK
-        foreach ($cart as $item) {
-            $produk = Produk::find($item['id']);
+        DB::beginTransaction();
 
-            if (!$produk || $produk->stok < $item['qty']) {
-                return back()->with(
-                    'error',
-                    'Stok produk "' . ($produk->nama_produk ?? '') . '" tidak mencukupi'
-                );
+        try {
+
+            // CEK STOK + HITUNG TOTAL
+            foreach ($cart as $item) {
+                $produk = Produk::find($item['id']);
+
+                if (!$produk) {
+                    throw new \Exception('Produk tidak ditemukan');
+                }
+
+                if ($produk->stok < $item['qty']) {
+                    throw new \Exception('Stok tidak cukup untuk ' . $produk->nama_produk);
+                }
+
+                $total += $item['price'] * $item['qty'];
             }
 
-            $total += $item['price'] * $item['qty'];
-        }
-
-        // SIMPAN ORDER
-        $order = Order::create([
-            'user_id'      => Auth::id(),
-            'total_price' => $total,
-            'status'      => 'pending',
-        ]);
-
-        // SIMPAN ITEM + KURANGI STOK
-        foreach ($cart as $item) {
-            $produk = Produk::find($item['id']);
-
-            OrderItem::create([
-                'order_id'     => $order->id,
-                'produk_id'    => $produk->id,
-                'product_name' => $produk->nama_produk,
-                'price'        => $item['price'],
-                'qty'          => $item['qty'],
+            // CREATE ORDER
+            $order = Order::create([
+                'user_id'     => Auth::id(),
+                'total_price' => $total,
+                'status'      => 'pending',
             ]);
 
-            // 🔥 KURANGI STOK
-            $produk->decrement('stok', $item['qty']);
+            // SAVE ORDER ITEMS
+            foreach ($cart as $item) {
+                DB::table('order_items')->insert([
+                    'order_id'     => $order->id,
+                    'produk_id'    => (int) $item['id'],
+                    'product_name' => $item['name'],
+                    'price'        => $item['price'],
+                    'qty'          => $item['qty'],
+                    'created_at'   => now(),
+                    'updated_at'   => now(),
+                ]);
+            }
+
+            // MIDTRANS CONFIG
+            Config::$serverKey = config('midtrans.server_key');
+            Config::$isProduction = config('midtrans.is_production');
+            Config::$isSanitized = true;
+            Config::$is3ds = true;
+
+            $params = [
+                'transaction_details' => [
+                    'order_id' => $order->id,
+                    'gross_amount' => $total,
+                ],
+                'customer_details' => [
+                    'name'  => Auth::user()->name,
+                    'email' => Auth::user()->email,
+                ],
+            ];
+
+            $snapToken = Snap::getSnapToken($params);
+
+            DB::commit();
+
+            session()->forget('cart');
+
+            return view('customer.payment', compact('snapToken', 'order'));
+
+        } catch (\Exception $e) {
+
+            DB::rollBack();
+
+            return back()->with('error', $e->getMessage());
         }
-
-        session()->forget('cart');
-
-        return redirect()->route('customer.dashboard')
-            ->with('success', 'Order berhasil dibuat');
     }
 
     /*
-    |--------------------------------------------------------------------------
-    | RIWAYAT ORDER CUSTOMER
-    |--------------------------------------------------------------------------
+    |-----------------------------------------
+    | LIST ORDERS
+    |-----------------------------------------
     */
     public function myOrders()
     {
-        $orders = Order::with('items')
-            ->where('user_id', Auth::id())
+        $orders = Order::where('user_id', Auth::id())
             ->latest()
             ->get();
 
@@ -153,19 +183,66 @@ class OrderController extends Controller
     }
 
     /*
-    |--------------------------------------------------------------------------
-    | DETAIL ORDER CUSTOMER
-    |--------------------------------------------------------------------------
+    |-----------------------------------------
+    | ORDER DETAIL
+    |-----------------------------------------
     */
-    public function orderDetail(Order $order)
+    public function orderDetail($id)
     {
-        // 🔐 SECURITY: hanya owner order
-        if ($order->user_id !== Auth::id()) {
-            abort(403);
-        }
-
-        $order->load('items');
+        $order = Order::with('items')
+            ->where('id', $id)
+            ->where('user_id', Auth::id())
+            ->firstOrFail();
 
         return view('customer.order-detail', compact('order'));
+    }
+
+    /*
+    |-----------------------------------------
+    | MIDTRANS CALLBACK
+    |-----------------------------------------
+    */
+    public function callback(Request $request)
+    {
+        $serverKey = config('midtrans.server_key');
+
+        $hashed = hash("sha512",
+            $request->order_id .
+            $request->status_code .
+            $request->gross_amount .
+            $serverKey
+        );
+
+        if ($hashed != $request->signature_key) {
+            return response()->json(['message' => 'Invalid signature'], 403);
+        }
+
+        $order = Order::find($request->order_id);
+
+        if (!$order) {
+            return response()->json(['message' => 'Order not found'], 404);
+        }
+
+        if ($request->transaction_status == 'settlement') {
+
+            $order->status = 'paid';
+
+            foreach ($order->items as $item) {
+                $produk = Produk::find($item->produk_id);
+
+                if ($produk) {
+                    $produk->decrement('stok', $item->qty);
+                }
+            }
+
+        } elseif ($request->transaction_status == 'pending') {
+            $order->status = 'pending';
+        } else {
+            $order->status = 'failed';
+        }
+
+        $order->save();
+
+        return response()->json(['message' => 'OK']);
     }
 }
