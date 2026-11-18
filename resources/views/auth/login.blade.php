@@ -6,7 +6,7 @@
         Welcome to <span class="bg-gradient-to-r from-pink-500 to-teal-400 bg-clip-text text-transparent">Donlight</span>
     </h1>
     <p class="text-center text-gray-500 mb-6">
-        Sign in to continue your sweet journey
+        Sign in untuk melanjutkan ke dashboard
     </p>
 
     {{-- Tabs --}}
